@@ -448,118 +448,159 @@ const char* skillName(ClassType t) {
 }
 int skillCost(ClassType t) { return t == ClassType::Mage ? 15 : 10; }
 
-BattleResult battle(Character& c, Monster m) {
-    c.st.battles++;
+enum class ActionOutcome { Retry, Done, Fled };
+
+struct SkillEffect {
+    double mult;
+    bool ignoreDef;
+    int hits;
+};
+
+// Індекс = (int)ClassType: Воїн, Маг, Лучник
+const SkillEffect SKILL_EFFECTS[] = {{1.8, false, 1}, {2.2, true, 1}, {1.0, false, 2}};
+
+void printBattleHeader(const Monster& m) {
     line('=');
     if (m.boss) cout << "!!! БОС: " << m.name << " !!!\n";
     else cout << "Вам трапився монстр: " << m.name << "\n";
     line('=');
-    int turn = 0;
+}
 
+void printTurnStatus(const Character& c, const Monster& m, int turn) {
+    cout << "\n--- Хід " << turn << " ---\n";
+    cout << c.name << " HP " << c.hp << "/" << c.maxHp << " " << bar(c.hp, c.maxHp, 15)
+         << "  Мана " << c.mana << "/" << c.maxMana << "\n";
+    cout << m.name << " HP " << m.hp << "/" << m.maxHp << " " << bar(m.hp, m.maxHp, 15) << "\n";
+    cout << "1. Атакувати\n";
+    cout << "2. " << skillName(c.cls) << " (мана: " << skillCost(c.cls) << ")\n";
+    cout << "3. Випити зілля\n";
+    cout << "4. Втекти" << (m.boss ? " (неможливо від боса)" : "") << "\n";
+}
+
+ActionOutcome playerAttack(Character& c, Monster& m) {
+    bool crit;
+    int dmg = rollHit(c, m, 1.0, false, crit);
+    dealDamage(c, m, dmg, crit);
+    return ActionOutcome::Done;
+}
+
+ActionOutcome playerSkill(Character& c, Monster& m) {
+    int cost = skillCost(c.cls);
+    if (c.mana < cost) {
+        cout << "Недостатньо мани!\n";
+        return ActionOutcome::Retry;
+    }
+    c.mana -= cost;
+    cout << "Ви використали \"" << skillName(c.cls) << "\"!\n";
+    const SkillEffect& fx = SKILL_EFFECTS[(int)c.cls];
+    for (int k = 0; k < fx.hits; k++) {
+        bool crit = false;
+        int dmg = rollHit(c, m, fx.mult, fx.ignoreDef, crit);
+        dealDamage(c, m, dmg, crit);
+    }
+    return ActionOutcome::Done;
+}
+
+ActionOutcome playerPotion(Character& c) {
+    if (usePotion(c)) return ActionOutcome::Done;
+    cout << "Оберіть іншу дію.\n";
+    return ActionOutcome::Retry;
+}
+
+ActionOutcome playerFlee(Character& c, const Monster& m) {
+    if (m.boss) {
+        cout << "Від боса не втекти!\n";
+        return ActionOutcome::Retry;
+    }
+    if (!chance(50)) {
+        cout << "Втекти не вдалося!\n";
+        return ActionOutcome::Done;
+    }
+    cout << "Ви успішно втекли!\n";
+    c.st.fled++;
+    return ActionOutcome::Fled;
+}
+
+ActionOutcome playerTurn(Character& c, Monster& m) {
     while (true) {
-        turn++;
-        cout << "\n--- Хід " << turn << " ---\n";
-        cout << c.name << " HP " << c.hp << "/" << c.maxHp << " " << bar(c.hp, c.maxHp, 15)
-             << "  Мана " << c.mana << "/" << c.maxMana << "\n";
-        cout << m.name << " HP " << m.hp << "/" << m.maxHp << " " << bar(m.hp, m.maxHp, 15) << "\n";
-        cout << "1. Атакувати\n";
-        cout << "2. " << skillName(c.cls) << " (мана: " << skillCost(c.cls) << ")\n";
-        cout << "3. Випити зілля\n";
-        cout << "4. Втекти" << (m.boss ? " (неможливо від боса)" : "") << "\n";
+        int ch = readInt(1, 4);
+        ActionOutcome r;
+        if (ch == 1) r = playerAttack(c, m);
+        else if (ch == 2) r = playerSkill(c, m);
+        else if (ch == 3) r = playerPotion(c);
+        else r = playerFlee(c, m);
+        if (r != ActionOutcome::Retry) return r;
+    }
+}
 
-        bool acted = false;
-        while (!acted) {
-            int ch = readInt(1, 4);
-            if (ch == 1) {
-                bool crit;
-                int dmg = rollHit(c, m, 1.0, false, crit);
-                dealDamage(c, m, dmg, crit);
-                acted = true;
-            } else if (ch == 2) {
-                int cost = skillCost(c.cls);
-                if (c.mana < cost) {
-                    cout << "Недостатньо мани!\n";
-                    continue;
-                }
-                c.mana -= cost;
-                cout << "Ви використали \"" << skillName(c.cls) << "\"!\n";
-                bool crit = false;
-                if (c.cls == ClassType::Warrior) {
-                    int dmg = rollHit(c, m, 1.8, false, crit);
-                    dealDamage(c, m, dmg, crit);
-                } else if (c.cls == ClassType::Mage) {
-                    int dmg = rollHit(c, m, 2.2, true, crit);
-                    dealDamage(c, m, dmg, crit);
-                } else {
-                    for (int k = 0; k < 2; k++) {
-                        int dmg = rollHit(c, m, 1.0, false, crit);
-                        dealDamage(c, m, dmg, crit);
-                    }
-                }
-                acted = true;
-            } else if (ch == 3) {
-                if (usePotion(c)) acted = true;
-                else cout << "Оберіть іншу дію.\n";
-            } else {
-                if (m.boss) {
-                    cout << "Від боса не втекти!\n";
-                    continue;
-                }
-                if (chance(50)) {
-                    cout << "Ви успішно втекли!\n";
-                    c.st.fled++;
-                    return BattleResult::Flee;
-                }
-                cout << "Втекти не вдалося!\n";
-                acted = true;
-            }
-        }
+void tryDrop(Character& c, const Item& item, const char* msg) {
+    if (c.inv.size() >= INVENTORY_LIMIT) return;
+    c.inv.push_back(item);
+    cout << msg;
+}
 
+void grantLoot(Character& c, const Monster& m) {
+    if (m.boss) {
+        c.st.bossesKilled++;
+        questEvent(c, QT_BOSS, 1);
+        tryDrop(c, allPotions()[1], "З боса випало: Велике зілля здоров'я!\n");
+        return;
+    }
+    c.st.monstersKilled++;
+    questEvent(c, QT_KILL, 1);
+    if (chance(30)) tryDrop(c, allPotions()[0], "З монстра випало: Мале зілля здоров'я!\n");
+}
+
+void handleVictory(Character& c, const Monster& m) {
+    cout << "\n*** " << m.name << " переможений! ***\n";
+    cout << "Нагорода: " << m.exp << " досвіду, " << m.gold << " золота.\n";
+    addGold(c, m.gold);
+    grantLoot(c, m);
+    gainExp(c, m.exp);
+}
+
+int monsterDamage(const Character& c, const Monster& m, int turn) {
+    double dmgF = m.atk - c.defense() / 2.0 + randInt(-2, 2);
+    if (m.boss && turn % 3 == 0) {
+        dmgF *= 1.5;
+        cout << m.name << " б'є ПОТУЖНОЮ атакою!\n";
+    }
+    if (chance(5)) {
+        dmgF *= 1.5;
+        cout << m.name << " завдає критичного удару!\n";
+    }
+    return max(1, (int)dmgF);
+}
+
+void monsterTurn(Character& c, const Monster& m, int turn) {
+    int dmg = monsterDamage(c, m, turn);
+    c.hp = max(0, c.hp - dmg);
+    c.st.damageTaken += dmg;
+    cout << m.name << " завдає вам " << dmg << " шкоди.\n";
+}
+
+void handleDefeat(Character& c) {
+    cout << "\nВи загинули у битві...\n";
+    c.st.deaths++;
+    int lost = c.gold / 4;
+    c.gold -= lost;
+    c.hp = max(1, c.maxHp / 2);
+    cout << "Вас врятували жерці: втрачено " << lost << " золота, HP відновлено наполовину.\n";
+}
+
+BattleResult battle(Character& c, Monster m) {
+    c.st.battles++;
+    printBattleHeader(m);
+    for (int turn = 1;; turn++) {
+        printTurnStatus(c, m, turn);
+        if (playerTurn(c, m) == ActionOutcome::Fled) return BattleResult::Flee;
         if (m.hp <= 0) {
-            cout << "\n*** " << m.name << " переможений! ***\n";
-            cout << "Нагорода: " << m.exp << " досвіду, " << m.gold << " золота.\n";
-            addGold(c, m.gold);
-            if (m.boss) {
-                c.st.bossesKilled++;
-                questEvent(c, QT_BOSS, 1);
-                if (c.inv.size() < INVENTORY_LIMIT) {
-                    c.inv.push_back(allPotions()[1]);
-                    cout << "З боса випало: Велике зілля здоров'я!\n";
-                }
-            } else {
-                c.st.monstersKilled++;
-                questEvent(c, QT_KILL, 1);
-                if (chance(30) && c.inv.size() < INVENTORY_LIMIT) {
-                    c.inv.push_back(allPotions()[0]);
-                    cout << "З монстра випало: Мале зілля здоров'я!\n";
-                }
-            }
-            gainExp(c, m.exp);
+            handleVictory(c, m);
             return BattleResult::Win;
         }
-
-        double dmgF = m.atk - c.defense() / 2.0 + randInt(-2, 2);
-        bool special = m.boss && turn % 3 == 0;
-        if (special) {
-            dmgF *= 1.5;
-            cout << m.name << " б'є ПОТУЖНОЮ атакою!\n";
-        }
-        if (chance(5)) {
-            dmgF *= 1.5;
-            cout << m.name << " завдає критичного удару!\n";
-        }
-        int dmg = max(1, (int)dmgF);
-        c.hp = max(0, c.hp - dmg);
-        c.st.damageTaken += dmg;
-        cout << m.name << " завдає вам " << dmg << " шкоди.\n";
-
+        monsterTurn(c, m, turn);
         if (c.hp <= 0) {
-            cout << "\nВи загинули у битві...\n";
-            c.st.deaths++;
-            int lost = c.gold / 4;
-            c.gold -= lost;
-            c.hp = max(1, c.maxHp / 2);
-            cout << "Вас врятували жерці: втрачено " << lost << " золота, HP відновлено наполовину.\n";
+            handleDefeat(c);
             return BattleResult::Lose;
         }
     }
